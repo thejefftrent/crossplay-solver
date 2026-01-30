@@ -194,8 +194,9 @@
         // --- CONSTANTS & CONFIG ---
         const BOARD_SIZE = 15;
         const DICT_URL = 'https://raw.githubusercontent.com/redbo/scrabble/master/dictionary.txt';
-        const STORAGE_KEY_BOARD = 'crossplay_board_v2'; // Bumped version
-        const STORAGE_KEY_RACK = 'crossplay_rack_v2';
+        const STORAGE_KEY_BOARD = 'crossplay_board_v3'; // Bumped version for new format
+        const STORAGE_KEY_RACK = 'crossplay_rack_v3';
+        const STORAGE_KEY_DICT = 'crossplay_dict_v1';
 
         // Standard Tile Values
         // NOTE: Lowercase keys are implicit 0 if not found here, but logic handles it manually.
@@ -241,6 +242,7 @@
         // Results State
         let currentMoves = [];
         let sortMode = 'score'; // 'score' | 'tiles'
+        let stickyMove = null; // Track clicked move for sticky preview
 
         // --- DATA STRUCTURES ---
 
@@ -289,9 +291,27 @@
 
         async function loadDictionary() {
             try {
-                const response = await fetch(DICT_URL);
-                if (!response.ok) throw new Error("Network response was not ok");
-                const text = await response.text();
+                let text = localStorage.getItem(STORAGE_KEY_DICT);
+                let fromCache = true;
+
+                // If not in storage, fetch it
+                if (!text) {
+                    fromCache = false;
+                    document.getElementById('loading-status').textContent = "Downloading dictionary...";
+                    const response = await fetch(DICT_URL);
+                    if (!response.ok) throw new Error("Network response was not ok");
+                    text = await response.text();
+                    
+                    // Try to save to local storage (might fail if quota exceeded)
+                    try {
+                        localStorage.setItem(STORAGE_KEY_DICT, text);
+                    } catch (e) {
+                        console.warn("Could not save dictionary to local storage (quota exceeded likely).", e);
+                    }
+                } else {
+                    document.getElementById('loading-status').textContent = "Loading from cache...";
+                }
+
                 const words = text.split(/\r?\n/);
                 
                 dictionaryTrie = new Trie();
@@ -308,13 +328,16 @@
                     }
                 }
                 
-                console.log(`Dictionary loaded: ${count} words.`);
+                console.log(`Dictionary loaded: ${count} words. Source: ${fromCache ? 'Cache' : 'Network'}`);
                 document.getElementById('loading-overlay').style.display = 'none';
                 isDictionaryLoaded = true;
             } catch (error) {
                 console.error("Dictionary Load Error:", error);
                 document.getElementById('loading-status').textContent = "Error loading dictionary. Please refresh.";
                 document.getElementById('loading-status').classList.add('text-red-500');
+                
+                // If it failed and we had something in storage, maybe it was corrupt. Clear it.
+                localStorage.removeItem(STORAGE_KEY_DICT);
             }
         }
 
@@ -451,8 +474,6 @@
                     input.addEventListener('focus', (e) => handleCellFocus(e, r, c));
                     input.addEventListener('click', (e) => e.target.select()); // Also select on click
                     
-                    // Removed contextmenu (right-click) functionality
-                    
                     cellDiv.addEventListener('dblclick', (e) => {
                         e.preventDefault();
                         toggleDirection(r, c);
@@ -473,7 +494,6 @@
                 rack.focus();
                 saveState();
             });
-            // Removed load-default-btn listener
             
             const rackInput = document.getElementById('rack-input');
             rackInput.addEventListener('input', (e) => {
@@ -484,6 +504,22 @@
             // Sort Toggle Listeners
             document.getElementById('sort-score-btn').addEventListener('click', () => setSortMode('score'));
             document.getElementById('sort-tiles-btn').addEventListener('click', () => setSortMode('tiles'));
+
+            // Global click to clear sticky preview
+            document.addEventListener('click', (e) => {
+                // If stickyMove exists and we didn't click inside a result item (handled by stopPropagation), clear it
+                if (stickyMove) {
+                    stickyMove = null;
+                    clearPreview();
+                    // Clear UI highlights
+                    const list = document.getElementById('results-list');
+                    if (list) {
+                        Array.from(list.children).forEach(child => {
+                            child.classList.remove('bg-indigo-100', 'border-indigo-200');
+                        });
+                    }
+                }
+            });
         }
 
         function setSortMode(mode) {
@@ -639,10 +675,9 @@
             }
         }
 
-        // Removed cycleMultiplier
-
         function clearWordsOnly() {
             boardState.forEach(row => row.forEach(cell => { cell.char = ''; }));
+            stickyMove = null; // Clear sticky state
             renderBoard();
             saveState();
             document.getElementById('results-list').innerHTML = '<div class="p-8 text-center text-slate-400">Words cleared.</div>';
@@ -1023,6 +1058,10 @@
             listEl.innerHTML = '';
             countEl.innerText = `${moves.length} found`;
 
+            // Reset sticky state on new results
+            stickyMove = null;
+            clearPreview();
+
             if (moves.length === 0) {
                 listEl.innerHTML = '<div class="p-4 text-center text-slate-500">No valid moves found.</div>';
                 return;
@@ -1070,8 +1109,36 @@
                 `;
                 
                 // Interaction Listeners
-                item.addEventListener('mouseenter', () => previewMove(move));
-                item.addEventListener('mouseleave', clearPreview);
+                item.addEventListener('mouseenter', () => {
+                    if (!stickyMove) previewMove(move);
+                });
+                item.addEventListener('mouseleave', () => {
+                    if (!stickyMove) clearPreview();
+                });
+                
+                // Sticky Click Logic
+                item.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent global click from clearing
+                    
+                    if (stickyMove === move) {
+                        // Deselect if clicking same one
+                        stickyMove = null;
+                        clearPreview();
+                        item.classList.remove('bg-indigo-100', 'border-indigo-200');
+                    } else {
+                        // Select new one
+                        stickyMove = move;
+                        previewMove(move);
+                        
+                        // Clear other highlights
+                        Array.from(listEl.children).forEach(child => {
+                            child.classList.remove('bg-indigo-100', 'border-indigo-200');
+                        });
+                        
+                        // Add highlight
+                        item.classList.add('bg-indigo-100', 'border-indigo-200');
+                    }
+                });
                 
                 // Play Button Click
                 const playBtn = item.querySelector('.play-btn');
@@ -1115,6 +1182,10 @@
 
             // Update UI
             rackInput.value = rack.join('');
+            
+            // Clear sticky state since move is played
+            stickyMove = null;
+            
             renderBoard();
             saveState();
             
