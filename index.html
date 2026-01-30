@@ -172,9 +172,12 @@
 
             <!-- Results Panel -->
             <div class="bg-white rounded-xl shadow-md border border-slate-200 flex-1 flex flex-col overflow-hidden min-h-[400px]">
-                <div class="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-                    <h3 class="font-bold text-slate-700">Top Moves</h3>
-                    <span id="results-count" class="text-xs font-mono bg-slate-200 px-2 py-1 rounded text-slate-600">0 found</span>
+                <div class="p-3 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                    <div class="flex bg-slate-200 p-1 rounded-lg">
+                        <button id="sort-score-btn" class="px-3 py-1 text-xs font-bold rounded-md bg-white text-slate-700 shadow-sm transition">Top Scoring</button>
+                        <button id="sort-tiles-btn" class="px-3 py-1 text-xs font-bold rounded-md text-slate-500 hover:text-slate-700 transition">Most Tiles</button>
+                    </div>
+                    <span id="results-count" class="text-xs font-mono text-slate-500">0 found</span>
                 </div>
                 
                 <div id="results-list" class="flex-1 overflow-y-auto results-scroll p-0">
@@ -238,6 +241,10 @@
         
         // Blank tile entry mode
         let pendingBlankCoords = null; // {r, c} if waiting for letter after '?'
+
+        // Results State
+        let currentMoves = [];
+        let sortMode = 'score'; // 'score' | 'tiles'
 
         // --- DATA STRUCTURES ---
 
@@ -445,6 +452,33 @@
                 e.target.value = e.target.value.toUpperCase().replace(/[^A-Z?*]/g, '');
                 saveState();
             });
+
+            // Sort Toggle Listeners
+            document.getElementById('sort-score-btn').addEventListener('click', () => setSortMode('score'));
+            document.getElementById('sort-tiles-btn').addEventListener('click', () => setSortMode('tiles'));
+        }
+
+        function setSortMode(mode) {
+            sortMode = mode;
+            
+            // Update Buttons UI
+            const scoreBtn = document.getElementById('sort-score-btn');
+            const tilesBtn = document.getElementById('sort-tiles-btn');
+            
+            const activeClass = "bg-white text-slate-700 shadow-sm";
+            const inactiveClass = "text-slate-500 hover:text-slate-700";
+            
+            if (mode === 'score') {
+                scoreBtn.className = `px-3 py-1 text-xs font-bold rounded-md transition ${activeClass}`;
+                tilesBtn.className = `px-3 py-1 text-xs font-bold rounded-md transition ${inactiveClass}`;
+            } else {
+                scoreBtn.className = `px-3 py-1 text-xs font-bold rounded-md transition ${inactiveClass}`;
+                tilesBtn.className = `px-3 py-1 text-xs font-bold rounded-md transition ${activeClass}`;
+            }
+
+            if (currentMoves.length > 0) {
+                displayResults(currentMoves);
+            }
         }
 
         function handleCellFocus(e, r, c) {
@@ -484,6 +518,11 @@
                 e.target.value = ''; // Clear input
                 pendingBlankCoords = { r, c };
                 renderBoard(); // Re-render to show yellow indicator
+                
+                // RESTORE FOCUS
+                const input = document.querySelector(`.cell[data-r="${r}"][data-c="${c}"] input`);
+                if(input) input.focus();
+                
                 return;
             }
 
@@ -641,6 +680,7 @@
 
             setTimeout(() => {
                 const results = runSolver(rackStr);
+                currentMoves = results; // Store for sorting
                 displayResults(results);
                 solveBtn.disabled = false;
                 spinner.classList.add('hidden');
@@ -712,7 +752,7 @@
 
             identifyAnchors(boardState); 
 
-            return moves.sort((a, b) => b.score - a.score).slice(0, 50); 
+            return moves;
         }
 
         // --- ALGORITHM HELPERS ---
@@ -940,6 +980,7 @@
             moves.push({
                 word: displayWord,
                 score: totalScore,
+                tilesUsed: tilesUsed,
                 r: realR,
                 c: realC,
                 isVert: isVert,
@@ -997,8 +1038,9 @@
                 return;
             }
 
-            const seen = new Set();
+            // Remove duplicates (same word, same position, same score)
             const uniqueMoves = [];
+            const seen = new Set();
             moves.forEach(m => {
                 const key = `${m.word}-${m.r}-${m.c}-${m.isVert}`;
                 if(!seen.has(key)) {
@@ -1007,7 +1049,17 @@
                 }
             });
 
-            uniqueMoves.forEach((move, index) => {
+            // Sorting Logic
+            uniqueMoves.sort((a, b) => {
+                if (sortMode === 'score') return b.score - a.score;
+                if (sortMode === 'tiles') return b.tilesUsed - a.tilesUsed;
+                return 0;
+            });
+
+            // Limit display to top 50
+            const displayMoves = uniqueMoves.slice(0, 50);
+
+            displayMoves.forEach((move, index) => {
                 const item = document.createElement('div');
                 item.className = 'flex justify-between items-center p-3 border-b border-slate-100 hover:bg-indigo-50 cursor-pointer transition group';
                 item.innerHTML = `
@@ -1015,18 +1067,71 @@
                         <span class="text-slate-400 font-mono text-sm w-6">${index + 1}.</span>
                         <div>
                             <div class="font-bold text-slate-800 text-lg tracking-wide">${move.word}</div>
-                            <div class="text-xs text-slate-500 font-mono">${move.coord} ${move.isVert ? '↓' : '→'}</div>
+                            <div class="text-xs text-slate-500 font-mono flex gap-2">
+                                <span>${move.coord} ${move.isVert ? '↓' : '→'}</span>
+                                <span class="text-indigo-500">${move.tilesUsed} tiles</span>
+                            </div>
                         </div>
                     </div>
-                    <div class="font-bold text-indigo-600 text-xl group-hover:scale-110 transition">${move.score}</div>
+                    <div class="flex items-center gap-3">
+                        <div class="font-bold text-indigo-600 text-xl">${move.score}</div>
+                        <button class="play-btn bg-green-500 hover:bg-green-600 text-white text-xs font-bold px-2 py-1 rounded shadow-sm opacity-0 group-hover:opacity-100 transition">PLAY</button>
+                    </div>
                 `;
                 
+                // Interaction Listeners
                 item.addEventListener('mouseenter', () => previewMove(move));
                 item.addEventListener('mouseleave', clearPreview);
-                item.addEventListener('click', () => previewMove(move));
+                
+                // Play Button Click
+                const playBtn = item.querySelector('.play-btn');
+                playBtn.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent item click logic if any
+                    playMove(move);
+                });
 
                 listEl.appendChild(item);
             });
+        }
+        
+        function playMove(move) {
+            const rackInput = document.getElementById('rack-input');
+            let rack = rackInput.value.split('');
+            const { r, c, word, isVert } = move;
+
+            for (let i = 0; i < word.length; i++) {
+                let cr = isVert ? r + i : r;
+                let cc = isVert ? c : c + i;
+                let char = word[i]; // 'a' or 'A'
+
+                // Only process if board was empty (meaning we used a tile from rack)
+                if (boardState[cr][cc].char === '') {
+                     // Update Board
+                     boardState[cr][cc].char = char; // Stores 'a' for blank, 'A' for normal
+
+                     // Update Rack
+                     if (char === char.toLowerCase() && char !== char.toUpperCase()) {
+                         // It's a blank
+                         let idx = rack.indexOf('?');
+                         if (idx === -1) idx = rack.indexOf('*');
+                         if (idx !== -1) rack.splice(idx, 1);
+                     } else {
+                         // Normal letter
+                         let idx = rack.indexOf(char);
+                         if (idx !== -1) rack.splice(idx, 1);
+                     }
+                }
+            }
+
+            // Update UI
+            rackInput.value = rack.join('');
+            renderBoard();
+            saveState();
+            
+            // Feedback
+            document.getElementById('results-list').innerHTML = '<div class="p-8 text-center text-green-600 font-bold">Move played!</div>';
+            document.getElementById('results-count').innerText = '0 found';
+            currentMoves = [];
         }
 
         function previewMove(move) {
@@ -1034,13 +1139,10 @@
             
             const r = move.r;
             const c = move.c;
-            const word = move.word.toUpperCase(); // For preview purpose we show upper, or could show logic
-            // To show blanks as lowercase in phantom:
             const displayWord = move.word;
-            
             const isVert = move.isVert;
 
-            for (let i = 0; i < word.length; i++) {
+            for (let i = 0; i < displayWord.length; i++) {
                 let cr = isVert ? r + i : r;
                 let cc = isVert ? c : c + i;
                 
