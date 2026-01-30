@@ -133,8 +133,7 @@
                     <p class="text-sm text-slate-500">Enter board state & rack to find the best move.</p>
                 </div>
                 <div class="flex gap-2">
-                    <button id="reset-board-btn" class="px-3 py-1 text-sm bg-white border border-slate-300 rounded hover:bg-slate-100 transition shadow-sm">Clear Words</button>
-                    <button id="load-default-btn" class="px-3 py-1 text-sm bg-indigo-50 border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-100 transition shadow-sm">Reset Layout</button>
+                    <button id="reset-board-btn" class="px-3 py-1 text-sm bg-white border border-slate-300 rounded hover:bg-slate-100 transition shadow-sm">Reset</button>
                 </div>
             </header>
 
@@ -146,7 +145,6 @@
             </div>
             
             <div class="text-xs text-slate-400 text-center mt-1 space-y-1">
-                <p><span class="font-bold text-indigo-600">Right-click</span> cell to cycle multipliers.</p>
                 <p><span class="font-bold text-indigo-600">Double-click</span> cell to toggle typing direction (Horizontal/Vertical).</p>
                 <p>Type <span class="font-bold font-mono">?</span> then a letter to place a blank (0 points).</p>
             </div>
@@ -229,9 +227,7 @@
         };
 
         // --- STATE ---
-        let boardState = Array(BOARD_SIZE).fill(null).map(() => 
-            Array(BOARD_SIZE).fill(null).map(() => ({ char: '', mult: M_NONE }))
-        );
+        let boardState = []; // Will be init in initializeBoard
         let dictionaryTrie = null;
         let isDictionaryLoaded = false;
         
@@ -285,7 +281,7 @@
         // --- INITIALIZATION ---
 
         async function init() {
-            renderBoard(); 
+            renderBoard(); // Initial render (empty/default)
             setupEventListeners();
             loadState(); 
             await loadDictionary();
@@ -334,15 +330,23 @@
         }
 
         function loadState() {
+            // Always start with fresh default multipliers
+            initializeBoard();
+
             try {
                 const savedBoard = localStorage.getItem(STORAGE_KEY_BOARD);
                 const savedRack = localStorage.getItem(STORAGE_KEY_RACK);
 
                 if (savedBoard) {
-                    boardState = JSON.parse(savedBoard);
-                    renderBoard(); 
-                } else {
-                    loadDefaultLayout();
+                    const parsed = JSON.parse(savedBoard);
+                    // Overlay characters ONLY. Do not trust multipliers from save.
+                    for(let r = 0; r < BOARD_SIZE; r++) {
+                        for(let c = 0; c < BOARD_SIZE; c++) {
+                            if (parsed[r] && parsed[r][c] && parsed[r][c].char) {
+                                boardState[r][c].char = parsed[r][c].char;
+                            }
+                        }
+                    }
                 }
 
                 if (savedRack) {
@@ -350,14 +354,41 @@
                 }
             } catch (e) {
                 console.error("Failed to load state", e);
-                loadDefaultLayout();
             }
+            // Render with the loaded chars + default multipliers
+            renderBoard();
         }
 
+        function initializeBoard() {
+            boardState = Array(BOARD_SIZE).fill(null).map(() => 
+                Array(BOARD_SIZE).fill(null).map(() => ({ char: '', mult: M_NONE }))
+            );
+            
+            const T = M_3W; // Triple Word
+            const D = M_2W; // Double Word
+            const t = M_3L; // Triple Letter
+            const d = M_2L; // Double Letter
+            
+            const setSym = (r, c, m) => {
+                boardState[r][c].mult = m;
+                boardState[r][14-c].mult = m;
+                boardState[14-r][c].mult = m;
+                boardState[14-r][14-c].mult = m;
+            };
+
+            setSym(0, 0, t); setSym(0, 7, d); setSym(7, 0, d); 
+            setSym(1, 1, D); setSym(3, 3, d); 
+            setSym(3, 7, D); setSym(7, 3, D);           
+            setSym(1, 6, t); setSym(6, 1, t); setSym(4, 5, t);setSym(5, 4, t); 
+            setSym(0, 3, T); setSym(4, 2, d); setSym(3, 0, T); setSym(5, 7, d); setSym(2, 4, d); setSym(7, 5, d); 
+        }
 
         // --- DOM MANIPULATION ---
 
         function renderBoard() {
+            // Ensure boardState exists (safe guard)
+            if (!boardState || boardState.length === 0) initializeBoard();
+
             const gridEl = document.getElementById('game-board');
             gridEl.innerHTML = '';
 
@@ -420,10 +451,7 @@
                     input.addEventListener('focus', (e) => handleCellFocus(e, r, c));
                     input.addEventListener('click', (e) => e.target.select()); // Also select on click
                     
-                    cellDiv.addEventListener('contextmenu', (e) => {
-                        e.preventDefault();
-                        cycleMultiplier(r, c);
-                    });
+                    // Removed contextmenu (right-click) functionality
                     
                     cellDiv.addEventListener('dblclick', (e) => {
                         e.preventDefault();
@@ -445,7 +473,7 @@
                 rack.focus();
                 saveState();
             });
-            document.getElementById('load-default-btn').addEventListener('click', loadDefaultLayout);
+            // Removed load-default-btn listener
             
             const rackInput = document.getElementById('rack-input');
             rackInput.addEventListener('input', (e) => {
@@ -611,18 +639,7 @@
             }
         }
 
-        function cycleMultiplier(r, c) {
-            // Cycle logic
-            let current = boardState[r][c].mult;
-            let next = (current + 1) % 5;
-            boardState[r][c].mult = next;
-            renderBoard();
-            saveState();
-            
-            // Restore focus
-            const input = document.querySelector(`.cell[data-r="${r}"][data-c="${c}"] input`);
-            if(input) input.focus();
-        }
+        // Removed cycleMultiplier
 
         function clearWordsOnly() {
             boardState.forEach(row => row.forEach(cell => { cell.char = ''; }));
@@ -630,33 +647,6 @@
             saveState();
             document.getElementById('results-list').innerHTML = '<div class="p-8 text-center text-slate-400">Words cleared.</div>';
             document.getElementById('results-count').innerText = '0 found';
-        }
-
-        function loadDefaultLayout() {
-            boardState = Array(BOARD_SIZE).fill(null).map(() => 
-                Array(BOARD_SIZE).fill(null).map(() => ({ char: '', mult: M_NONE }))
-            );
-            
-            const T = M_3W; // Triple Word
-            const D = M_2W; // Double Word
-            const t = M_3L; // Triple Letter
-            const d = M_2L; // Double Letter
-            
-            const setSym = (r, c, m) => {
-                boardState[r][c].mult = m;
-                boardState[r][14-c].mult = m;
-                boardState[14-r][c].mult = m;
-                boardState[14-r][14-c].mult = m;
-            };
-
-            setSym(0, 0, t); setSym(0, 7, d); setSym(7, 0, d); 
-            setSym(1, 1, D); setSym(3, 3, d); 
-            setSym(3, 7, D); setSym(7, 3, D);           
-            setSym(1, 6, t); setSym(6, 1, t); setSym(4, 5, t);setSym(5, 4, t); 
-            setSym(0, 3, T); setSym(4, 2, d); setSym(3, 0, T); setSym(5, 7, d); setSym(2, 4, d); setSym(7, 5, d); 
-            
-            renderBoard();
-            saveState();
         }
 
         // --- SOLVER LOGIC ---
