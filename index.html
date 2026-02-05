@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crossplay Solver - NYT Style</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         /* Custom scrollbar for results */
         .results-scroll::-webkit-scrollbar {
@@ -82,10 +83,10 @@
         }
 
         /* Multiplier Colors */
-        .mult-2l { background-color: #f0eacd; }
-        .mult-3l { background-color: #e3ead6; }
-        .mult-2w { background-color: #d9e0ee; }
-        .mult-3w { background-color: #e6dde8; }
+        .mult-2l { background-color: #bfdbfe; } /* Blue-200 */
+        .mult-3l { background-color: #86efac; } /* Green-300 */
+        .mult-2w { background-color: #fca5a5; } /* Red-300 */
+        .mult-3w { background-color: #fdba74; } /* Orange-300 */
         
         /* Phantom/Preview Style */
         .cell.phantom {
@@ -121,6 +122,13 @@
         <h2 class="text-xl font-bold text-slate-700">Loading Dictionary...</h2>
         <p class="text-slate-500 text-sm" id="loading-status">Fetching word list...</p>
     </div>
+    
+    <!-- Processing Overlay for OCR -->
+    <div id="processing-overlay" style="display: none;" class="fixed top-0 left-0 right-0 bottom-0 bg-white/90 z-50 flex flex-col items-center justify-center">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
+        <h2 class="text-xl font-bold text-slate-700">Analyzing Board...</h2>
+        <p class="text-slate-500 text-sm" id="processing-status">Reading tiles...</p>
+    </div>
 
     <!-- Main Container -->
     <div class="max-w-7xl mx-auto p-4 lg:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
@@ -133,6 +141,11 @@
                     <p class="text-sm text-slate-500">Enter board state & rack to find the best move.</p>
                 </div>
                 <div class="flex gap-2">
+                     <input type="file" id="board-upload" accept="image/*" class="hidden">
+                     <button id="import-btn" class="px-3 py-1 text-sm bg-indigo-50 border border-indigo-200 text-indigo-700 rounded hover:bg-indigo-100 transition shadow-sm flex items-center gap-1">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                        Import
+                     </button>
                     <button id="reset-board-btn" class="px-3 py-1 text-sm bg-white border border-slate-300 rounded hover:bg-slate-100 transition shadow-sm">Reset</button>
                 </div>
             </header>
@@ -194,12 +207,11 @@
         // --- CONSTANTS & CONFIG ---
         const BOARD_SIZE = 15;
         const DICT_URL = 'https://raw.githubusercontent.com/redbo/scrabble/master/dictionary.txt';
-        const STORAGE_KEY_BOARD = 'crossplay_board_v3'; // Bumped version for new format
+        const STORAGE_KEY_BOARD = 'crossplay_board_v3';
         const STORAGE_KEY_RACK = 'crossplay_rack_v3';
         const STORAGE_KEY_DICT = 'crossplay_dict_v1';
 
         // Standard Tile Values
-        // NOTE: Lowercase keys are implicit 0 if not found here, but logic handles it manually.
         const LETTER_VALUES = {
             'A': 1, 'B': 3, 'C': 3, 'D': 2, 'E': 1, 'F': 4, 'G': 2, 'H': 4, 'I': 1, 'J': 8, 'K': 5, 'L': 1, 'M': 3,
             'N': 1, 'O': 1, 'P': 3, 'Q': 10, 'R': 1, 'S': 1, 'T': 1, 'U': 1, 'V': 4, 'W': 4, 'X': 8, 'Y': 4, 'Z': 10,
@@ -228,21 +240,18 @@
         };
 
         // --- STATE ---
-        let boardState = []; // Will be init in initializeBoard
+        let boardState = []; 
         let dictionaryTrie = null;
         let isDictionaryLoaded = false;
         
-        // Input Direction State
         let inputDirection = 'horizontal'; 
         let lastFocusedPos = { r: 7, c: 7 };
         
-        // Blank tile entry mode
-        let pendingBlankCoords = null; // {r, c} if waiting for letter after '?'
+        let pendingBlankCoords = null; 
 
-        // Results State
         let currentMoves = [];
-        let sortMode = 'score'; // 'score' | 'tiles'
-        let stickyMove = null; // Track clicked move for sticky preview
+        let sortMode = 'score'; 
+        let stickyMove = null; 
 
         // --- DATA STRUCTURES ---
 
@@ -269,7 +278,6 @@
                 node.isWord = true;
             }
 
-            // Check if prefix exists
             search(word) {
                 let node = this.root;
                 for (let char of word) {
@@ -283,7 +291,7 @@
         // --- INITIALIZATION ---
 
         async function init() {
-            renderBoard(); // Initial render (empty/default)
+            renderBoard(); 
             setupEventListeners();
             loadState(); 
             await loadDictionary();
@@ -294,7 +302,6 @@
                 let text = localStorage.getItem(STORAGE_KEY_DICT);
                 let fromCache = true;
 
-                // If not in storage, fetch it
                 if (!text) {
                     fromCache = false;
                     document.getElementById('loading-status').textContent = "Downloading dictionary...";
@@ -302,7 +309,6 @@
                     if (!response.ok) throw new Error("Network response was not ok");
                     text = await response.text();
                     
-                    // Try to save to local storage (might fail if quota exceeded)
                     try {
                         localStorage.setItem(STORAGE_KEY_DICT, text);
                     } catch (e) {
@@ -335,8 +341,6 @@
                 console.error("Dictionary Load Error:", error);
                 document.getElementById('loading-status').textContent = "Error loading dictionary. Please refresh.";
                 document.getElementById('loading-status').classList.add('text-red-500');
-                
-                // If it failed and we had something in storage, maybe it was corrupt. Clear it.
                 localStorage.removeItem(STORAGE_KEY_DICT);
             }
         }
@@ -353,7 +357,6 @@
         }
 
         function loadState() {
-            // Always start with fresh default multipliers
             initializeBoard();
 
             try {
@@ -362,7 +365,6 @@
 
                 if (savedBoard) {
                     const parsed = JSON.parse(savedBoard);
-                    // Overlay characters ONLY. Do not trust multipliers from save.
                     for(let r = 0; r < BOARD_SIZE; r++) {
                         for(let c = 0; c < BOARD_SIZE; c++) {
                             if (parsed[r] && parsed[r][c] && parsed[r][c].char) {
@@ -378,7 +380,6 @@
             } catch (e) {
                 console.error("Failed to load state", e);
             }
-            // Render with the loaded chars + default multipliers
             renderBoard();
         }
 
@@ -387,10 +388,10 @@
                 Array(BOARD_SIZE).fill(null).map(() => ({ char: '', mult: M_NONE }))
             );
             
-            const T = M_3W; // Triple Word
-            const D = M_2W; // Double Word
-            const t = M_3L; // Triple Letter
-            const d = M_2L; // Double Letter
+            const T = M_3W; 
+            const D = M_2W; 
+            const t = M_3L; 
+            const d = M_2L; 
             
             const setSym = (r, c, m) => {
                 boardState[r][c].mult = m;
@@ -409,7 +410,6 @@
         // --- DOM MANIPULATION ---
 
         function renderBoard() {
-            // Ensure boardState exists (safe guard)
             if (!boardState || boardState.length === 0) initializeBoard();
 
             const gridEl = document.getElementById('game-board');
@@ -423,16 +423,13 @@
                     
                     const cellDiv = document.createElement('div');
                     
-                    // Determine Class
                     let classes = ['cell'];
                     if (hasChar) {
                         classes.push('occupied');
                     } else {
-                        // Only add multiplier class if NOT occupied
                         if (MULT_CLASSES[cellData.mult]) classes.push(MULT_CLASSES[cellData.mult]);
                     }
                     
-                    // Pending blank check
                     if (pendingBlankCoords && pendingBlankCoords.r === r && pendingBlankCoords.c === c) {
                         classes.push('blank-pending');
                     }
@@ -441,17 +438,14 @@
                     cellDiv.dataset.r = r;
                     cellDiv.dataset.c = c;
                     
-                    // 1. Center Star (Only if empty)
                     if (isCenter && !hasChar) {
                          const starSpan = document.createElement('span');
                          starSpan.className = 'absolute pointer-events-none text-yellow-400 text-2xl';
-                         starSpan.innerHTML = '★'; // Unicode Star
-                         // Add text shadow for visibility on white
+                         starSpan.innerHTML = '★'; 
                          starSpan.style.textShadow = '0 1px 2px rgba(0,0,0,0.2)';
                          cellDiv.appendChild(starSpan);
                     }
 
-                    // 2. Multiplier Label (Only if empty and not center - center has star)
                     if (!hasChar && !isCenter && cellData.mult !== M_NONE) {
                         const span = document.createElement('span');
                         span.className = 'absolute text-[10px] opacity-50 pointer-events-none select-none';
@@ -459,7 +453,6 @@
                         cellDiv.appendChild(span);
                     }
 
-                    // 3. Input
                     const input = document.createElement('input');
                     input.value = cellData.char;
                     input.maxLength = 1;
@@ -468,11 +461,10 @@
                         input.classList.add('is-blank');
                     }
                     
-                    // Event Listeners
                     input.addEventListener('input', (e) => handleCellInput(e, r, c));
                     input.addEventListener('keydown', (e) => handleCellKeydown(e, r, c));
                     input.addEventListener('focus', (e) => handleCellFocus(e, r, c));
-                    input.addEventListener('click', (e) => e.target.select()); // Also select on click
+                    input.addEventListener('click', (e) => e.target.select()); 
                     
                     cellDiv.addEventListener('dblclick', (e) => {
                         e.preventDefault();
@@ -501,17 +493,24 @@
                 saveState();
             });
 
-            // Sort Toggle Listeners
+            // Import Button
+            const importBtn = document.getElementById('import-btn');
+            const fileInput = document.getElementById('board-upload');
+            importBtn.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', (e) => {
+                if(e.target.files && e.target.files[0]) {
+                    processBoardImage(e.target.files[0]);
+                }
+                e.target.value = ''; // Reset so same file can be selected again
+            });
+
             document.getElementById('sort-score-btn').addEventListener('click', () => setSortMode('score'));
             document.getElementById('sort-tiles-btn').addEventListener('click', () => setSortMode('tiles'));
 
-            // Global click to clear sticky preview
             document.addEventListener('click', (e) => {
-                // If stickyMove exists and we didn't click inside a result item (handled by stopPropagation), clear it
                 if (stickyMove) {
                     stickyMove = null;
                     clearPreview();
-                    // Clear UI highlights
                     const list = document.getElementById('results-list');
                     if (list) {
                         Array.from(list.children).forEach(child => {
@@ -522,10 +521,227 @@
             });
         }
 
+        // --- IMAGE PROCESSING (OCR) ---
+
+        async function processBoardImage(file) {
+            const overlay = document.getElementById('processing-overlay');
+            const status = document.getElementById('processing-status');
+            overlay.style.display = 'flex';
+            status.textContent = "Loading image...";
+
+            try {
+                // 1. Load Image
+                const img = await loadImage(file);
+                
+                // CHECK ASPECT RATIO
+                const ratio = img.width / img.height;
+                if (ratio < 0.9 || ratio > 1.1) {
+                    if(!confirm("Warning: Image is not square.\n\nFor accurate results, you must crop the screenshot to include ONLY the 15x15 board grid.\n\nContinue anyway? (Results may be scrambled)")) {
+                        overlay.style.display = 'none';
+                        return;
+                    }
+                }
+                
+                // 2. Setup Canvas
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const SIZE = 1500; 
+                canvas.width = SIZE;
+                canvas.height = SIZE;
+                // Draw image nicely
+                ctx.drawImage(img, 0, 0, SIZE, SIZE);
+                
+                const CELL_SIZE = SIZE / 15;
+                const tilesToProcess = [];
+
+                status.textContent = "Detecting tiles...";
+                await new Promise(r => setTimeout(r, 50)); 
+
+                // 3. Scan Grid for Occupied Tiles
+                for (let r = 0; r < 15; r++) {
+                    for (let c = 0; c < 15; c++) {
+                        // Extract center crop for Detection (Ignore borders)
+                        const centerX = (c * CELL_SIZE) + (CELL_SIZE * 0.25);
+                        const centerY = (r * CELL_SIZE) + (CELL_SIZE * 0.25);
+                        const centerW = CELL_SIZE * 0.5;
+                        const centerH = CELL_SIZE * 0.5;
+
+                        const imgData = ctx.getImageData(centerX, centerY, centerW, centerH);
+                        
+                        // NEW LOGIC: Check brightness. 
+                        // Empty tiles are WHITE/LIGHT (> 200). 
+                        // Played tiles are BLUE/GREEN (< 150).
+                        if (isLikelyOccupied(imgData)) {
+                             // This is a dark tile. We need to Binarize it (invert colors).
+                             
+                             // Grab crop for OCR. Reduced to 0.72 to avoid grid lines, focused on center letter.
+                             const cropFactor = 0.72;
+                             const offset = (1 - cropFactor) / 2;
+                             const cropX = (c * CELL_SIZE) + (CELL_SIZE * offset);
+                             const cropY = (r * CELL_SIZE) + (CELL_SIZE * offset);
+                             const cropW = CELL_SIZE * cropFactor;
+                             const cropH = CELL_SIZE * cropFactor;
+                             
+                             const tileData = ctx.getImageData(cropX, cropY, cropW, cropH);
+                             const binarizedData = preprocessTile(tileData);
+
+                             tilesToProcess.push({ r, c, imgData: binarizedData });
+                        }
+                    }
+                }
+
+                if (tilesToProcess.length === 0) {
+                    alert("No dark tiles detected. Ensure your screenshot shows played blue/green tiles.");
+                    overlay.style.display = 'none';
+                    return;
+                }
+
+                status.textContent = `Reading ${tilesToProcess.length} tiles...`;
+
+                // 4. Stitch Tiles
+                const STRIP_PAD = 40; 
+                const TILE_W = 100; 
+                const TILE_H = 100;
+                
+                const stripCanvas = document.createElement('canvas');
+                stripCanvas.width = (tilesToProcess.length * (TILE_W + STRIP_PAD)) + STRIP_PAD;
+                stripCanvas.height = TILE_H + (STRIP_PAD * 2);
+                const sCtx = stripCanvas.getContext('2d');
+                
+                sCtx.fillStyle = "white";
+                sCtx.fillRect(0, 0, stripCanvas.width, stripCanvas.height);
+
+                const tempC = document.createElement('canvas');
+                const tempCtx = tempC.getContext('2d');
+                
+                tilesToProcess.forEach((item, index) => {
+                    tempC.width = item.imgData.width;
+                    tempC.height = item.imgData.height;
+                    tempCtx.putImageData(item.imgData, 0, 0);
+                    
+                    const dx = STRIP_PAD + (index * (TILE_W + STRIP_PAD));
+                    const dy = STRIP_PAD;
+                    
+                    // Draw with internal padding so letter doesn't touch the edge
+                    const drawPad = 10;
+                    sCtx.drawImage(tempC, dx + drawPad, dy + drawPad, TILE_W - (drawPad*2), TILE_H - (drawPad*2));
+                });
+
+                // 5. Run Tesseract
+                const result = await Tesseract.recognize(
+                    stripCanvas,
+                    'eng',
+                    {
+                        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+                        // Add 0 to whitelist because O is often read as 0
+                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0' 
+                    }
+                );
+
+                // 6. Map back
+                clearWordsOnly(); 
+                let detectedCount = 0;
+
+                result.data.symbols.forEach(sym => {
+                    if (sym.confidence < 50) return;
+
+                    // Small text filter (Multiplier labels)
+                    const symHeight = sym.bbox.y1 - sym.bbox.y0;
+                    if (symHeight < (TILE_H * 0.35)) return; 
+
+                    // Map X coord to Tile Index
+                    const midX = (sym.bbox.x0 + sym.bbox.x1) / 2;
+                    const stride = TILE_W + STRIP_PAD;
+                    const tileIndex = Math.floor((midX - (STRIP_PAD/2)) / stride);
+
+                    if (tileIndex >= 0 && tileIndex < tilesToProcess.length) {
+                        const {r, c} = tilesToProcess[tileIndex];
+                        let char = sym.text;
+                        
+                        // Fix 0 -> O common error
+                        if (char === '0') char = 'O';
+
+                        if (/^[A-Z]$/.test(char)) {
+                            boardState[r][c].char = char;
+                            detectedCount++;
+                        }
+                    }
+                });
+
+                renderBoard();
+                saveState();
+                overlay.style.display = 'none';
+
+                if (detectedCount === 0) {
+                     alert("OCR finished but found no valid letters.\n\nTip: Crop image tightly to the grid.");
+                }
+
+            } catch (err) {
+                console.error(err);
+                alert("Error processing image.");
+                overlay.style.display = 'none';
+            }
+        }
+
+        function loadImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => resolve(img);
+                    img.onerror = reject;
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function isLikelyOccupied(imgData) {
+            const data = imgData.data;
+            let totalLuma = 0;
+            const count = data.length / 4;
+            
+            for (let i = 0; i < data.length; i += 4) {
+                // Approximate Luma
+                totalLuma += (data[i] + data[i+1] + data[i+2]) / 3;
+            }
+            const avg = totalLuma / count;
+            
+            // Tiles are DARK Blue/Green (< 180 brightness approx)
+            // Empty grid is WHITE/Light Grey (> 220 brightness approx)
+            return avg < 180;
+        }
+
+        function preprocessTile(imgData) {
+            const d = imgData.data;
+            for (let i=0; i<d.length; i+=4) {
+                const r = d[i];
+                const g = d[i+1];
+                const b = d[i+2];
+                // Luma
+                const luma = 0.299*r + 0.587*g + 0.114*b;
+                
+                // BINARIZE: 
+                // Since original is Blue BG / White Text:
+                // If Luma is high (White Text) -> Set to Black (0)
+                // If Luma is low (Blue BG) -> Set to White (255)
+                
+                // Lowered threshold to 130 to make letters "Thicker" 
+                // (captures more of the anti-aliased edge pixels as black text)
+                const val = (luma > 130) ? 0 : 255;
+                
+                d[i] = val;
+                d[i+1] = val;
+                d[i+2] = val;
+            }
+            return imgData;
+        }
+
+        // --- UI & LOGIC ---
+
         function setSortMode(mode) {
             sortMode = mode;
             
-            // Update Buttons UI
             const scoreBtn = document.getElementById('sort-score-btn');
             const tilesBtn = document.getElementById('sort-tiles-btn');
             
@@ -547,7 +763,7 @@
 
         function handleCellFocus(e, r, c) {
             lastFocusedPos = { r, c };
-            e.target.select(); // Select all text to allow overwrite
+            e.target.select(); 
             updateDirectionIndicator();
         }
 
@@ -577,69 +793,52 @@
         function handleCellInput(e, r, c) {
             let val = e.target.value;
 
-            // 1. Check for Blank Tile Trigger
             if (val === '?') {
-                e.target.value = ''; // Clear input
+                e.target.value = ''; 
                 pendingBlankCoords = { r, c };
-                renderBoard(); // Re-render to show yellow indicator
+                renderBoard(); 
                 
-                // RESTORE FOCUS
                 const input = document.querySelector(`.cell[data-r="${r}"][data-c="${c}"] input`);
                 if(input) input.focus();
                 
                 return;
             }
 
-            // 2. Handle Blank Entry (if pending)
             if (pendingBlankCoords && pendingBlankCoords.r === r && pendingBlankCoords.c === c) {
                 if (/^[a-zA-Z]$/.test(val)) {
-                    val = val.toLowerCase(); // Force lowercase for blank
-                    pendingBlankCoords = null; // Reset pending state
+                    val = val.toLowerCase(); 
+                    pendingBlankCoords = null; 
                 } else {
                     e.target.value = '';
-                    return; // Invalid char for blank
+                    return; 
                 }
             } else {
-                // 3. Normal Entry
                 val = val.toUpperCase();
-                // If user typed valid char
                 if (!/^[A-Z]$/.test(val) && val !== '') {
-                    // Try to recover if it was an overwrite scenario where value became 2 chars
-                    // e.g. "A" -> user types "B" -> value is "AB" or "BA"
-                    // Since we select() on focus, usually it replaces. 
-                    // But if not selected, take the last char typed.
                     let lastChar = val.slice(-1).toUpperCase();
                     if (/^[A-Z]$/.test(lastChar)) {
                         val = lastChar;
                     } else {
-                        e.target.value = boardState[r][c].char; // Revert
+                        e.target.value = boardState[r][c].char; 
                         return;
                     }
                 }
             }
             
-            // Update State
             boardState[r][c].char = val;
             saveState();
-            
-            // Re-render specifically to update Styles (hide multiplier)
-            // But we want to maintain focus and flow. 
-            // RenderBoard destroys DOM. Let's do a soft DOM update or full render then refocus.
             renderBoard(); 
             
-            // Restore Focus and Move
             if (val) {
                 if (inputDirection === 'horizontal') moveFocus(r, c, 0, 1);
                 else moveFocus(r, c, 1, 0);
             } else {
-                // If cleared, stay put
                 const input = document.querySelector(`.cell[data-r="${r}"][data-c="${c}"] input`);
                 if (input) input.focus();
             }
         }
 
         function handleCellKeydown(e, r, c) {
-            // If we are in blank pending mode, Escape cancels it
             if (e.key === 'Escape' && pendingBlankCoords) {
                 pendingBlankCoords = null;
                 renderBoard();
@@ -649,7 +848,6 @@
             }
 
             if (e.key === 'Backspace' && e.target.value === '') {
-                // Backspace moves back
                 if (inputDirection === 'horizontal') moveFocus(r, c, 0, -1);
                 else moveFocus(r, c, -1, 0);
             } else if (e.key === 'ArrowRight') {
@@ -670,21 +868,19 @@
                 const target = document.querySelector(`.cell[data-r="${nr}"][data-c="${nc}"] input`);
                 if (target) {
                     target.focus();
-                    target.select(); // Ensure select on move
+                    target.select(); 
                 }
             }
         }
 
         function clearWordsOnly() {
             boardState.forEach(row => row.forEach(cell => { cell.char = ''; }));
-            stickyMove = null; // Clear sticky state
+            stickyMove = null; 
             renderBoard();
             saveState();
             document.getElementById('results-list').innerHTML = '<div class="p-8 text-center text-slate-400">Words cleared.</div>';
             document.getElementById('results-count').innerText = '0 found';
         }
-
-        // --- SOLVER LOGIC ---
 
         function solve() {
             if (!isDictionaryLoaded) {
@@ -705,7 +901,7 @@
 
             setTimeout(() => {
                 const results = runSolver(rackStr);
-                currentMoves = results; // Store for sorting
+                currentMoves = results; 
                 displayResults(results);
                 solveBtn.disabled = false;
                 spinner.classList.add('hidden');
@@ -729,7 +925,6 @@
                         let node = dictionaryTrie.root;
                         let prefix = '';
 
-                        // Case 1: Connect to existing word on left
                         if (c > 0 && grid[r][c-1].char) {
                             let k = c - 1;
                             while (k >= 0 && grid[r][k].char) k--;
@@ -737,7 +932,7 @@
                             
                             let validPrefix = true;
                             for (let i = k; i < c; i++) {
-                                let char = grid[r][i].char.toUpperCase(); // Ensure Trie match is Upper
+                                let char = grid[r][i].char.toUpperCase(); 
                                 prefix += char;
                                 if (node.children[char]) {
                                     node = node.children[char];
@@ -748,7 +943,6 @@
                             }
                             if (!validPrefix) continue;
                         } 
-                        // Case 2: Empty space on left
                         else {
                             if (c > 0) {
                                 let k = c - 1;
@@ -779,8 +973,6 @@
 
             return moves;
         }
-
-        // --- ALGORITHM HELPERS ---
 
         function transpose(grid) {
             return grid[0].map((_, colIndex) => grid.map(row => row[colIndex]));
@@ -954,7 +1146,6 @@
                 displayWord += isBlank ? char.toLowerCase() : char;
                 
                 if (grid[r][currentC].char) {
-                    // Check if EXISTING tile is a blank (lowercase)
                     let existingVal = grid[r][currentC].char;
                     let existingIsBlank = (existingVal === existingVal.toLowerCase() && existingVal !== existingVal.toUpperCase());
                     
@@ -1049,8 +1240,6 @@
             return wordScore * wordMult;
         }
 
-        // --- UI RESULTS ---
-
         function displayResults(moves) {
             const listEl = document.getElementById('results-list');
             const countEl = document.getElementById('results-count');
@@ -1058,7 +1247,6 @@
             listEl.innerHTML = '';
             countEl.innerText = `${moves.length} found`;
 
-            // Reset sticky state on new results
             stickyMove = null;
             clearPreview();
 
@@ -1067,7 +1255,6 @@
                 return;
             }
 
-            // Remove duplicates (same word, same position, same score)
             const uniqueMoves = [];
             const seen = new Set();
             moves.forEach(m => {
@@ -1078,14 +1265,12 @@
                 }
             });
 
-            // Sorting Logic
             uniqueMoves.sort((a, b) => {
                 if (sortMode === 'score') return b.score - a.score;
                 if (sortMode === 'tiles') return b.tilesUsed - a.tilesUsed;
                 return 0;
             });
 
-            // Limit display to top 50
             const displayMoves = uniqueMoves.slice(0, 50);
 
             displayMoves.forEach((move, index) => {
@@ -1108,7 +1293,6 @@
                     </div>
                 `;
                 
-                // Interaction Listeners
                 item.addEventListener('mouseenter', () => {
                     if (!stickyMove) previewMove(move);
                 });
@@ -1116,34 +1300,28 @@
                     if (!stickyMove) clearPreview();
                 });
                 
-                // Sticky Click Logic
                 item.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent global click from clearing
+                    e.stopPropagation(); 
                     
                     if (stickyMove === move) {
-                        // Deselect if clicking same one
                         stickyMove = null;
                         clearPreview();
                         item.classList.remove('bg-indigo-100', 'border-indigo-200');
                     } else {
-                        // Select new one
                         stickyMove = move;
                         previewMove(move);
                         
-                        // Clear other highlights
                         Array.from(listEl.children).forEach(child => {
                             child.classList.remove('bg-indigo-100', 'border-indigo-200');
                         });
                         
-                        // Add highlight
                         item.classList.add('bg-indigo-100', 'border-indigo-200');
                     }
                 });
                 
-                // Play Button Click
                 const playBtn = item.querySelector('.play-btn');
                 playBtn.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent item click logic if any
+                    e.stopPropagation(); 
                     playMove(move);
                 });
 
@@ -1159,37 +1337,29 @@
             for (let i = 0; i < word.length; i++) {
                 let cr = isVert ? r + i : r;
                 let cc = isVert ? c : c + i;
-                let char = word[i]; // 'a' or 'A'
+                let char = word[i]; 
 
-                // Only process if board was empty (meaning we used a tile from rack)
                 if (boardState[cr][cc].char === '') {
-                     // Update Board
-                     boardState[cr][cc].char = char; // Stores 'a' for blank, 'A' for normal
+                     boardState[cr][cc].char = char; 
 
-                     // Update Rack
                      if (char === char.toLowerCase() && char !== char.toUpperCase()) {
-                         // It's a blank
                          let idx = rack.indexOf('?');
                          if (idx === -1) idx = rack.indexOf('*');
                          if (idx !== -1) rack.splice(idx, 1);
                      } else {
-                         // Normal letter
                          let idx = rack.indexOf(char);
                          if (idx !== -1) rack.splice(idx, 1);
                      }
                 }
             }
 
-            // Update UI
             rackInput.value = rack.join('');
             
-            // Clear sticky state since move is played
             stickyMove = null;
             
             renderBoard();
             saveState();
             
-            // Feedback
             document.getElementById('results-list').innerHTML = '<div class="p-8 text-center text-green-600 font-bold">Move played!</div>';
             document.getElementById('results-count').innerText = '0 found';
             currentMoves = [];
@@ -1213,7 +1383,7 @@
                         cell.classList.add('phantom');
                         const input = cell.querySelector('input');
                         input.dataset.original = input.value;
-                        input.value = displayWord[i]; // Show upper or lower
+                        input.value = displayWord[i]; 
                     }
                 }
             }
